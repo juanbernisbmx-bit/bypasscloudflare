@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="es">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Origin Scanner</title>
+<style>
+  :root{
+    --bg:#0a0e14; --panel:#111823; --panel2:#0d141d; --border:#1e2a38;
+    --fg:#c7d2de; --muted:#6b7a8d; --accent:#2ee6a6; --accent2:#38bdf8;
+    --warn:#f5a524; --bad:#f2545b; --good:#2ee6a6;
+    --mono:"SFMono-Regular",Consolas,"Liberation Mono",Menlo,monospace;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--fg);
+    font-family:var(--mono);font-size:14px;line-height:1.5}
+  .wrap{max-width:1000px;margin:0 auto;padding:28px 16px 80px}
+  header h1{font-size:20px;margin:0 0 2px;letter-spacing:.5px}
+  header h1 .dot{color:var(--accent)}
+  .sub{color:var(--muted);font-size:12px;margin-bottom:22px}
+  .disc{background:#1a1205;border:1px solid #3a2a08;color:var(--warn);
+    font-size:11px;padding:8px 12px;border-radius:6px;margin-bottom:20px}
+  .searchbar{display:flex;gap:8px;margin-bottom:10px}
+  .searchbar input{flex:1;background:var(--panel);border:1px solid var(--border);
+    color:var(--fg);padding:12px 14px;border-radius:6px;font-family:var(--mono);
+    font-size:15px;outline:none}
+  .searchbar input:focus{border-color:var(--accent2)}
+  .searchbar button{background:var(--accent);color:#04120c;border:0;
+    padding:0 22px;border-radius:6px;font-weight:700;cursor:pointer;
+    font-family:var(--mono);font-size:14px}
+  .searchbar button:disabled{opacity:.5;cursor:wait}
+  .opts{color:var(--muted);font-size:12px;margin-bottom:24px}
+  .opts label{cursor:pointer}
+  #status{color:var(--muted);font-size:13px;min-height:18px;margin-bottom:12px}
+  .grid{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:22px}
+  .kpi{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    padding:14px}
+  .kpi .n{font-size:24px;font-weight:700}
+  .kpi .l{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.5px}
+  .kpi.cf-yes .n{color:var(--warn)} .kpi.cf-no .n{color:var(--good)}
+  .card{background:var(--panel);border:1px solid var(--border);border-radius:8px;
+    margin-bottom:16px;overflow:hidden}
+  .card h2{font-size:13px;margin:0;padding:12px 16px;background:var(--panel2);
+    border-bottom:1px solid var(--border);text-transform:uppercase;
+    letter-spacing:.5px;color:var(--accent2)}
+  .card .body{padding:8px 16px 14px}
+  .row{display:flex;gap:10px;padding:5px 0;border-bottom:1px dashed #16202c;
+    word-break:break-all}
+  .row:last-child{border-bottom:0}
+  .row .k{color:var(--muted);min-width:70px;flex-shrink:0}
+  .tag{display:inline-block;padding:2px 8px;border-radius:4px;font-size:11px;
+    font-weight:700;margin-left:8px}
+  .t-conf{background:#07301f;color:var(--good);border:1px solid #0d5a39}
+  .t-prob{background:#06283a;color:var(--accent2);border:1px solid #0d4a6b}
+  .t-resp{background:#2a1f05;color:var(--warn);border:1px solid #5a4208}
+  .t-no{background:#2a0c0e;color:var(--bad);border:1px solid #5a1216}
+  .t-cf{background:#2a1f05;color:var(--warn);border:1px solid #5a4208}
+  .ip{color:var(--fg);font-weight:700}
+  .muted{color:var(--muted)}
+  .pill{background:var(--panel2);border:1px solid var(--border);border-radius:4px;
+    padding:3px 8px;display:inline-block;margin:3px 4px 0 0;font-size:12px}
+  .err{color:var(--bad);background:#1a0608;border:1px solid #3a0d10;padding:12px;
+    border-radius:6px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <h1>origin<span class="dot">::</span>scanner</h1>
+    <div class="sub">Recon de IP de origen tras Cloudflare &mdash; estilo Shodan</div>
+  </header>
+
+  <div class="disc">&#9888; Uso exclusivo para auditoria / pentesting AUTORIZADO POR ESCRITO.
+    No ejecutar contra dominios de terceros sin permiso.</div>
+
+  <div class="searchbar">
+    <input id="domain" placeholder="ejemplo.com" autocomplete="off"
+           spellcheck="false">
+    <button id="go">SCAN</button>
+  </div>
+  <div class="opts">
+    <label><input type="checkbox" id="validate" checked>
+      Validacion activa (peticion directa a IPs con Host header inyectado)</label>
+  </div>
+
+  <div id="status"></div>
+  <div id="out"></div>
+</div>
+
+<script>
+const $ = s => document.querySelector(s);
+const out = $("#out"), status = $("#status"), btn = $("#go");
+
+function esc(s){return (s+"").replace(/[&<>"]/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]));}
+
+function tagFor(v){
+  const m={"origin-confirmado":["t-conf","CONFIRMADO"],
+           "origin-probable":["t-prob","PROBABLE"],
+           "responde-distinto":["t-resp","RESPONDE"],
+           "no-origin":["t-no","SIN RESPUESTA"]};
+  const [c,l]=m[v]||["t-no",v];
+  return `<span class="tag ${c}">${l}</span>`;
+}
+
+function records(dns){
+  let h="";
+  for(const k of ["A","AAAA","MX","NS","SPF","TXT"]){
+    const v=dns[k]||[];
+    if(!v.length) continue;
+    h+=`<div class="row"><span class="k">${k}</span><span>${v.map(esc).join("<br>")}</span></div>`;
+  }
+  return h||'<div class="muted">Sin registros.</div>';
+}
+
+function render(d){
+  const cfCls = d.behind_cloudflare ? "cf-yes" : "cf-no";
+  const cfTxt = d.behind_cloudflare ? "SI" : "NO";
+  let h = `
+    <div class="grid">
+      <div class="kpi ${cfCls}"><div class="n">${cfTxt}</div><div class="l">Tras Cloudflare</div></div>
+      <div class="kpi"><div class="n">${d.subdomain_count}</div><div class="l">Subdominios</div></div>
+      <div class="kpi"><div class="n">${d.candidate_count}</div><div class="l">IPs candidatas</div></div>
+      <div class="kpi"><div class="n">${d.elapsed}s</div><div class="l">Duracion</div></div>
+    </div>`;
+
+  // Validaciones (lo mas importante primero)
+  if(d.validations && d.validations.length){
+    h+=`<div class="card"><h2>IPs candidatas a origen</h2><div class="body">`;
+    for(const v of d.validations){
+      const tag = v.cf_block ? '<span class="tag t-cf">BLOQUEO CF</span>' : tagFor(v.verdict);
+      h+=`<div class="row"><span>
+            <span class="ip">${esc(v.ip)}</span>${tag}
+            <span class="muted"> score ${v.score}${v.status?(" · HTTP "+v.status):""}${v.title?(" · "+esc(v.title)):""}</span>
+            ${v.hosts&&v.hosts.length?`<br><span class="muted">${v.hosts.map(esc).join(", ")}</span>`:""}
+          </span></div>`;
+    }
+    h+=`</div></div>`;
+  } else if(d.candidate_ips && d.candidate_ips.length){
+    h+=`<div class="card"><h2>IPs candidatas (sin validar)</h2><div class="body">`;
+    h+=d.candidate_ips.map(ip=>`<span class="pill">${esc(ip)}</span>`).join("");
+    h+=`</div></div>`;
+  }
+
+  h+=`<div class="card"><h2>Registros DNS</h2><div class="body">${records(d.dns)}</div></div>`;
+
+  h+=`<div class="card"><h2>Subdominios (crt.sh) · ${d.subdomain_count}</h2><div class="body">`;
+  h+= d.subdomains.length ? d.subdomains.map(s=>`<span class="pill">${esc(s)}</span>`).join("")
+                          : '<span class="muted">Ninguno.</span>';
+  h+=`</div></div>`;
+
+  if(d.cloudflare_ips && d.cloudflare_ips.length){
+    h+=`<div class="card"><h2>IPs de Cloudflare (descartadas)</h2><div class="body">`;
+    h+=d.cloudflare_ips.map(ip=>`<span class="pill">${esc(ip)}</span>`).join("");
+    h+=`</div></div>`;
+  }
+
+  out.innerHTML=h;
+}
+
+async function run(){
+  const domain=$("#domain").value.trim();
+  if(!domain) return;
+  const validate=$("#validate").checked?"1":"0";
+  btn.disabled=true; out.innerHTML="";
+  status.textContent="Escaneando "+domain+" ... (crt.sh puede tardar)";
+  try{
+    const r=await fetch(`/api/scan?domain=${encodeURIComponent(domain)}&validate=${validate}`);
+    const d=await r.json();
+    if(d.error){ out.innerHTML=`<div class="err">${esc(d.error)}</div>`; }
+    else{ render(d); }
+    status.textContent="";
+  }catch(e){
+    out.innerHTML=`<div class="err">Fallo de red: ${esc(e.message)}</div>`;
+    status.textContent="";
+  }finally{ btn.disabled=false; }
+}
+
+btn.addEventListener("click",run);
+$("#domain").addEventListener("keydown",e=>{if(e.key==="Enter")run();});
+</script>
+</body>
+</html>
