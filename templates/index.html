@@ -131,13 +131,24 @@ function render(d){
       h+=`<div class="row"><span>
             <span class="ip">${esc(v.ip)}</span>${tag}
             <span class="muted"> score ${v.score}${v.status?(" · HTTP "+v.status):""}${v.matched_host?(" · match="+esc(v.matched_host)):""}${v.title?(" · "+esc(v.title)):""}</span>
-            ${v.hosts&&v.hosts.length?`<br><span class="muted">${v.hosts.map(esc).join(", ")}</span>`:""}
+            ${(v.sources&&v.sources.length?v.sources:(v.hosts||[])).length?`<br><span class="muted">${(v.sources&&v.sources.length?v.sources:v.hosts).map(esc).join(", ")}</span>`:""}
           </span></div>`;
     }
     h+=`</div></div>`;
   } else if(d.candidate_ips && d.candidate_ips.length){
     h+=`<div class="card"><h2>IPs candidatas (sin validar)</h2><div class="body">`;
     h+=d.candidate_ips.map(ip=>`<span class="pill">${esc(ip)}</span>`).join("");
+    h+=`</div></div>`;
+  }
+
+  if(d.mail_ips && d.mail_ips.length){
+    h+=`<div class="card"><h2>IPs de correo (MX/SPF)</h2><div class="body">`;
+    for(const m of d.mail_ips){
+      h+=`<div class="row"><span><span class="ip">${esc(m.ip)}</span>
+          <span class="muted"> ${m.sources.map(esc).join(", ")}</span></span></div>`;
+    }
+    if(d.spf_ranges && d.spf_ranges.length)
+      h+=`<div class="row"><span class="muted">rangos SPF (no expandidos): ${d.spf_ranges.map(esc).join(", ")}</span></div>`;
     h+=`</div></div>`;
   }
 

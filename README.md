@@ -10,8 +10,12 @@ dominio protegido por Cloudflare.
 
 Metes un dominio en la web y el backend devuelve:
 
-- **Registros DNS**: A, AAAA, MX, NS, TXT y **SPF** (el correo suele salir del
-  origen real, no de Cloudflare — de ahi su valor).
+- **Registros DNS**: A, AAAA, MX, NS, TXT y **SPF**.
+- **Mineria de MX/SPF**: resuelve los hosts de correo (MX) y los mecanismos SPF
+  `ip4`/`ip6`/`a`/`mx` y los suma como IPs candidatas — el correo suele salir
+  del origen real, no de Cloudflare. Los `include:` (proveedores de terceros
+  como Google/Zoho) se omiten. Esas IPs pasan igual por la validacion web, que
+  descarta sola los relays que no sirven el sitio.
 - **Subdominios** vistos en Certificate Transparency (crt.sh).
 - **Deteccion de Cloudflare**: separa las IPs de rangos CF de las candidatas.
 - **IPs candidatas a origen**, validadas con peticion directa + cabecera `Host`

@@ -79,13 +79,22 @@ def print_report(d):
                 extra.append(f"match={v['matched_host']}")
             if v["title"]:
                 extra.append(v["title"])
-            hosts = (" <- " + ", ".join(v["hosts"])) if v.get("hosts") else ""
+            src = v.get("sources") or v.get("hosts") or []
+            srctxt = (" <- " + ", ".join(src)) if src else ""
             print(f"  {color}{label}{C.RESET} {C.BOLD}{v['ip']:<16}{C.RESET} "
-                  f"score={v['score']} {C.DIM}{' · '.join(extra)}{hosts}{C.RESET}")
+                  f"score={v['score']} {C.DIM}{' · '.join(extra)}{srctxt}{C.RESET}")
     elif d.get("candidate_ips"):
         hr("IPs candidatas (sin validar)")
         for ip in d["candidate_ips"]:
             print(f"  {ip}")
+
+    # Infraestructura de correo (MX/SPF) -- el correo suele salir del origen real
+    if d.get("mail_ips"):
+        hr("IPs de correo (MX/SPF)")
+        for m in d["mail_ips"]:
+            print(f"  {m['ip']:<16} {C.DIM}{', '.join(m['sources'])}{C.RESET}")
+    if d.get("spf_ranges"):
+        print(f"  {C.DIM}rangos SPF (no expandidos): {', '.join(d['spf_ranges'])}{C.RESET}")
 
     # Cloudflare descartadas
     if d.get("cloudflare_ips"):

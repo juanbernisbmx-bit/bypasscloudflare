@@ -294,6 +294,82 @@ def validate_ip(ip, hosts, baselines, timeout=8):
 
 
 # --------------------------------------------------------------------------- #
+#  Mineria de MX / SPF  (el correo suele salir del origen real, no de Cloudflare)
+# --------------------------------------------------------------------------- #
+
+def _valid_ip(s):
+    try:
+        ipaddress.ip_address(s)
+        return True
+    except ValueError:
+        return False
+
+
+def _mx_host(mx_record):
+    """'10 mx.zoho.com.' -> 'mx.zoho.com'."""
+    parts = mx_record.split()
+    host = (parts[-1] if parts else mx_record).rstrip(".").lower()
+    return host
+
+
+def spf_mx_candidates(domain, records, cf_nets):
+    """Extrae IPs candidatas de los registros MX y de los mecanismos SPF
+    (ip4/ip6/a/mx). Devuelve (dict ip -> [fuentes], [rangos_cidr_spf]).
+
+    Nota: los `include:` del SPF (p.ej. _spf.google.com, zohomail.com) apuntan
+    a proveedores de correo de terceros, no al origen web, asi que se omiten.
+    Las IPs que si entran pasan luego por la validacion web, que descarta sola
+    los relays de correo (no sirven el sitio => score ~0)."""
+    sources = {}            # ip -> set(tags)
+    ranges = []             # CIDRs ip4/ip6 del SPF (informativo, no se expanden)
+    to_resolve = {}         # host -> set(tags)
+
+    # --- MX ---
+    for mx in records.get("MX", []):
+        h = _mx_host(mx)
+        if h:
+            to_resolve.setdefault(h, set()).add(f"mx:{h}")
+
+    # --- SPF ---
+    spf = ""
+    for cand in records.get("SPF", []) + records.get("TXT", []):
+        if cand.lower().startswith("v=spf1"):
+            spf = cand
+            break
+    for tok in spf.split():
+        t = tok.strip().lower()
+        if t.startswith(("ip4:", "ip6:")):
+            val = tok.split(":", 1)[1]
+            if "/" in val:
+                ranges.append(val)                      # rango: no lo expandimos
+            elif _valid_ip(val):
+                sources.setdefault(val, set()).add("spf:" + t[:3])
+        elif t == "a":
+            to_resolve.setdefault(domain, set()).add("spf:a")
+        elif t.startswith("a:"):
+            h = tok.split(":", 1)[1].rstrip(".").lower()
+            to_resolve.setdefault(h, set()).add(f"spf:a:{h}")
+        elif t == "mx":
+            for mx in records.get("MX", []):
+                h = _mx_host(mx)
+                if h:
+                    to_resolve.setdefault(h, set()).add("spf:mx")
+        # include:/redirect=/exists:/ptr/all => se omiten (terceros o no son IPs)
+
+    # Resolver los hosts recolectados.
+    if to_resolve:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            for host, ips in pool.map(resolve_host, list(to_resolve)):
+                for ip in ips:
+                    sources.setdefault(ip, set()).update(to_resolve[host])
+
+    # Descartar las que sean de Cloudflare.
+    clean = {ip: sorted(tags) for ip, tags in sources.items()
+             if not is_cf_ip(ip, cf_nets)}
+    return clean, sorted(set(ranges))
+
+
+# --------------------------------------------------------------------------- #
 #  Orquestador principal
 # --------------------------------------------------------------------------- #
 
@@ -320,16 +396,29 @@ def scan(domain, validate=True, max_candidates=40):
 
     behind_cf = len(cf_ips) > 0
 
+    # Minar MX/SPF: el correo suele salir del origen real. Estas IPs entran
+    # como candidatas; la validacion web descarta sola los relays de terceros.
+    mail_sources, spf_ranges = spf_mx_candidates(domain, records, cf_nets)
+    mail_ips = sorted(mail_sources)
+    candidate_ips = sorted(set(candidate_ips) | set(mail_ips))
+
     # Validacion opcional (lo activo/activa el frontend).
     validations = []
     if validate and candidate_ips:
         cand_set = set(candidate_ips)
-        # Mapa inverso IP -> hosts que resuelven a ella (solo candidatas).
+        # Mapa inverso IP -> hosts que resuelven a ella (subdominios).
         rev = {}
         for h, ips in host_ip.items():
             for ip in ips:
                 if ip in cand_set:
                     rev.setdefault(ip, []).append(h)
+
+        # Procedencia unificada por IP: subdominios + etiquetas de MX/SPF.
+        ip_sources = {}
+        for ip, hs in rev.items():
+            ip_sources.setdefault(ip, set()).update(hs)
+        for ip, tags in mail_sources.items():
+            ip_sources.setdefault(ip, set()).update(tags)
 
         targets = candidate_ips[:max_candidates]
         # Hosts a probar por IP (acotado). Siempre probamos tambien el apex,
@@ -353,6 +442,7 @@ def scan(domain, validate=True, max_candidates=40):
                 lambda ip: validate_ip(ip, probe_hosts[ip], baselines), targets))
         for v in validations:
             v["hosts"] = sorted(rev.get(v["ip"], []))
+            v["sources"] = sorted(ip_sources.get(v["ip"], []))
         validations.sort(key=lambda v: v["score"], reverse=True)
 
     return {
@@ -366,6 +456,8 @@ def scan(domain, validate=True, max_candidates=40):
         "candidate_ips": candidate_ips,
         "candidate_count": len(candidate_ips),
         "host_ip_map": host_ip,
+        "mail_ips": [{"ip": ip, "sources": mail_sources[ip]} for ip in mail_ips],
+        "spf_ranges": spf_ranges,
         "validations": validations,
         "disclaimer": "Uso exclusivo para pentesting autorizado por escrito.",
     }
