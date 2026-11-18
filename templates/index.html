@@ -130,7 +130,7 @@ function render(d){
       const tag = v.cf_block ? '<span class="tag t-cf">BLOQUEO CF</span>' : tagFor(v.verdict);
       h+=`<div class="row"><span>
             <span class="ip">${esc(v.ip)}</span>${tag}
-            <span class="muted"> score ${v.score}${v.status?(" · HTTP "+v.status):""}${v.title?(" · "+esc(v.title)):""}</span>
+            <span class="muted"> score ${v.score}${v.status?(" · HTTP "+v.status):""}${v.matched_host?(" · match="+esc(v.matched_host)):""}${v.title?(" · "+esc(v.title)):""}</span>
             ${v.hosts&&v.hosts.length?`<br><span class="muted">${v.hosts.map(esc).join(", ")}</span>`:""}
           </span></div>`;
     }

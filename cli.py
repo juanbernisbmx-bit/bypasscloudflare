@@ -75,6 +75,8 @@ def print_report(d):
             extra = []
             if v["status"]:
                 extra.append(f"HTTP {v['status']}")
+            if v.get("matched_host"):
+                extra.append(f"match={v['matched_host']}")
             if v["title"]:
                 extra.append(v["title"])
             hosts = (" <- " + ", ".join(v["hosts"])) if v.get("hosts") else ""

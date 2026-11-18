@@ -230,29 +230,60 @@ def _score(baseline, status, length, title, fp):
     return round(s, 3)
 
 
-def validate_ip(ip, domain, baseline, timeout=8):
-    res = {"ip": ip, "reachable": False, "cf_block": False, "scheme": None,
-           "status": None, "length": None, "title": None, "score": 0.0,
-           "verdict": "no-origin"}
+# Cuantos hosts, como maximo, probamos por cada IP candidata.
+HOSTS_PER_IP = 4
+
+
+def _probe(ip, host, timeout=8):
+    """Una peticion directa a la IP inyectando Host: <host> (con SNI correcto).
+    Devuelve los datos del mejor intento entre https/http, o None si no responde."""
+    best = None
     for scheme in ("https", "http"):
         sess = requests.Session()
         if scheme == "https":
-            sess.mount("https://", SNIAdapter(server_hostname=domain))
+            sess.mount("https://", SNIAdapter(server_hostname=host))
         try:
-            r = sess.get(f"{scheme}://{ip}/", headers={"Host": domain, "User-Agent": USER_AGENT},
+            r = sess.get(f"{scheme}://{ip}/",
+                         headers={"Host": host, "User-Agent": USER_AGENT},
                          timeout=timeout, allow_redirects=False, verify=False)
         except requests.RequestException:
             continue
         finally:
             sess.close()
+        data = {"scheme": scheme, "status": r.status_code, "length": len(r.content),
+                "title": _title(r.text), "fp": _fingerprint(r.text),
+                "cf_block": _cf_block(r)}
+        best = data
+        if scheme == "https":   # preferimos https si responde
+            break
+    return best
+
+
+def validate_ip(ip, hosts, baselines, timeout=8):
+    """Valida una IP candidata probandola contra CADA host que resuelve a ella,
+    comparando con la linea base de ESE host (via Cloudflare), no con la portada
+    del apex. Se queda con el mejor parecido encontrado.
+
+    Esto corrige el falso negativo clasico: un backend que sirve, p.ej.,
+    api.dominio.com daba score bajo porque se comparaba contra la home del apex,
+    que es otra pagina."""
+    res = {"ip": ip, "reachable": False, "cf_block": False, "scheme": None,
+           "status": None, "length": None, "title": None, "score": 0.0,
+           "matched_host": None, "verdict": "no-origin"}
+    for host in hosts:
+        probe = _probe(ip, host, timeout=timeout)
+        if probe is None:
+            continue
         res["reachable"] = True
-        if _cf_block(r):
+        if probe["cf_block"]:
             res["cf_block"] = True
             continue
-        sc = _score(baseline, r.status_code, len(r.content), _title(r.text), _fingerprint(r.text))
+        sc = _score(baselines.get(host), probe["status"], probe["length"],
+                    probe["title"], probe["fp"])
         if sc > res["score"]:
-            res.update({"scheme": scheme, "status": r.status_code,
-                        "length": len(r.content), "title": _title(r.text), "score": sc})
+            res.update({"scheme": probe["scheme"], "status": probe["status"],
+                        "length": probe["length"], "title": probe["title"],
+                        "score": sc, "matched_host": host})
     if res["score"] >= 0.9:
         res["verdict"] = "origin-confirmado"
     elif res["score"] >= 0.6:
@@ -292,15 +323,34 @@ def scan(domain, validate=True, max_candidates=40):
     # Validacion opcional (lo activo/activa el frontend).
     validations = []
     if validate and candidate_ips:
-        baseline = get_baseline(domain)
-        targets = candidate_ips[:max_candidates]
-        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
-            validations = list(pool.map(lambda ip: validate_ip(ip, domain, baseline), targets))
-        # Adjuntar que hosts apuntan a cada IP.
+        cand_set = set(candidate_ips)
+        # Mapa inverso IP -> hosts que resuelven a ella (solo candidatas).
         rev = {}
         for h, ips in host_ip.items():
             for ip in ips:
-                rev.setdefault(ip, []).append(h)
+                if ip in cand_set:
+                    rev.setdefault(ip, []).append(h)
+
+        targets = candidate_ips[:max_candidates]
+        # Hosts a probar por IP (acotado). Siempre probamos tambien el apex,
+        # por si el backend sirve la propia home del dominio.
+        probe_hosts = {}
+        for ip in targets:
+            hs = sorted(rev.get(ip, []))[:HOSTS_PER_IP]
+            if domain not in hs:
+                hs = hs + [domain]
+            probe_hosts[ip] = hs
+
+        # Linea base POR HOST (via DNS normal / Cloudflare), deduplicada y cacheada.
+        needed = sorted({h for hs in probe_hosts.values() for h in hs})
+        baselines = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            for host, base in zip(needed, pool.map(get_baseline, needed)):
+                baselines[host] = base
+
+        with concurrent.futures.ThreadPoolExecutor(max_workers=10) as pool:
+            validations = list(pool.map(
+                lambda ip: validate_ip(ip, probe_hosts[ip], baselines), targets))
         for v in validations:
             v["hosts"] = sorted(rev.get(v["ip"], []))
         validations.sort(key=lambda v: v["score"], reverse=True)
