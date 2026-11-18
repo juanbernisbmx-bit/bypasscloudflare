@@ -137,6 +137,9 @@ def main():
     p.add_argument("domain", help="Dominio objetivo.")
     p.add_argument("--no-validate", action="store_true",
                    help="Omite la fase activa (no toca las IPs candidatas).")
+    p.add_argument("--subdomains-file",
+                   help="Usa subdominios de un archivo (uno por linea) en vez de "
+                        "crt.sh. Util con amass/subfinder o en el laboratorio.")
     p.add_argument("-o", "--output", help="Archivo de reporte de salida.")
     p.add_argument("--format", choices=("json", "csv"), default="json")
     p.add_argument("--no-color", action="store_true")
@@ -154,7 +157,11 @@ def main():
             sys.exit("[!] Cancelado.")
 
     print(f"[*] Escaneando {args.domain} ... (crt.sh puede tardar)")
-    d = scanner.scan(args.domain, validate=not args.no_validate)
+    subs = None
+    if args.subdomains_file:
+        with open(args.subdomains_file, encoding="utf-8") as f:
+            subs = [line for line in f.read().splitlines()]
+    d = scanner.scan(args.domain, validate=not args.no_validate, subdomains=subs)
     print_report(d)
     if args.output:
         save(d, args.output, args.format)

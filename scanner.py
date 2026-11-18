@@ -373,14 +373,20 @@ def spf_mx_candidates(domain, records, cf_nets):
 #  Orquestador principal
 # --------------------------------------------------------------------------- #
 
-def scan(domain, validate=True, max_candidates=40):
+def scan(domain, validate=True, max_candidates=40, subdomains=None):
     """Ejecuta el recon completo y devuelve un dict serializable a JSON."""
     domain = domain.strip().lower().lstrip(".")
     t0 = time.time()
     cf_nets = load_cf_networks()
 
     records = dns_records(domain)
-    subs = crtsh_subdomains(domain)
+    # Si nos pasan subdominios (p.ej. de amass/subfinder o del laboratorio),
+    # los usamos en vez de crt.sh. Util tambien offline.
+    if subdomains is not None:
+        subs = sorted({s.strip().lower().lstrip("*.")
+                       for s in subdomains if s.strip()} | {domain})
+    else:
+        subs = crtsh_subdomains(domain)
 
     # Resolver subdominios en paralelo.
     host_ip = {}

@@ -1,0 +1,61 @@
+# Laboratorio "bataedu.lab" para practicar descubrimiento de IP de origen.
+# Todo es LOCAL y ficticio. Levantar con:  docker compose up --build
+#
+# Topologia (red 172.28.0.0/24):
+#   dns     172.28.0.53  -> dnsmasq con la zona bataedu.lab
+#   edge    172.28.0.10  -> nginx que simula Cloudflare (mete cf-ray, bloquea)
+#   origin  172.28.0.20  -> el servidor REAL a descubrir (web + FTP + SSH:2222)
+#   mail    172.28.0.30  -> solo existe en DNS (MX/SPF); no sirve web
+#   scanner 172.28.0.40  -> corre la herramienta usando el DNS del lab
+name: bataedu-lab
+
+services:
+  dns:
+    build: ./dns
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.53
+
+  origin:
+    build: ./origin
+    # Publicamos puertos a localhost para practicar nmap desde el host (Mac):
+    #   nmap -sV -p2121,2222,8080,8443 127.0.0.1
+    ports:
+      - "2121:21"
+      - "8080:80"
+      - "8443:443"
+      - "2222:2222"
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.20
+
+  edge:
+    image: nginx:alpine
+    depends_on: [origin]
+    volumes:
+      - ./edge/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.10
+
+  # Corre la herramienta DENTRO de la red del lab, usando el DNS del lab.
+  # Perfil "tool" para que no arranque con el resto: se lanza a demanda.
+  scanner:
+    build:
+      context: ..
+      dockerfile: lab/scanner/Dockerfile
+    depends_on: [dns, edge, origin]
+    dns:
+      - 172.28.0.53
+    networks:
+      labnet:
+        ipv4_address: 172.28.0.40
+    profiles: ["tool"]
+    command: ["python", "cli.py", "bataedu.lab",
+              "--subdomains-file", "lab/subdomains.txt", "--yes", "--no-color"]
+
+networks:
+  labnet:
+    ipam:
+      config:
+        - subnet: 172.28.0.0/24

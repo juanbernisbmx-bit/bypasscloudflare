@@ -1,0 +1,5 @@
+bataedu.lab
+admin.bataedu.lab
+api.bataedu.lab
+auth.bataedu.lab
+n8n.bataedu.lab
